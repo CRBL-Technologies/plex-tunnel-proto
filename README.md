@@ -2,8 +2,8 @@
 
 `plex-tunnel-proto` is the shared transport and framing module used by both:
 
-- `github.com/antoinecorbel7/plex-tunnel`
-- `github.com/antoinecorbel7/plex-tunnel-server`
+- `https://github.com/CRBL-Technologies/plex-tunnel`
+- `https://github.com/CRBL-Technologies/plex-tunnel-server`
 
 It owns the wire-level contract between client and server:
 
