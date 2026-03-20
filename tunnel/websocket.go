@@ -131,6 +131,16 @@ type WebSocketConnection struct {
 	writeMu      sync.Mutex
 }
 
+type SendTiming struct {
+	WriteLockWait  time.Duration
+	FrameEncode    time.Duration
+	WebSocketWrite time.Duration
+}
+
+func (t SendTiming) Total() time.Duration {
+	return t.WriteLockWait + t.FrameEncode + t.WebSocketWrite
+}
+
 func newWebSocketConnection(conn *websocket.Conn, remoteAddr string, readTimeout, writeTimeout time.Duration) *WebSocketConnection {
 	// nhooyr websocket defaults to a low read limit (~32KiB), which is too small
 	// for proxied HTTP chunks and causes read-limited disconnects.
@@ -145,24 +155,41 @@ func newWebSocketConnection(conn *websocket.Conn, remoteAddr string, readTimeout
 }
 
 func (c *WebSocketConnection) Send(msg Message) error {
+	_, err := c.SendWithTiming(msg)
+	return err
+}
+
+func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
+	var timing SendTiming
+
+	lockWaitStartedAt := time.Now()
 	c.writeMu.Lock()
+	timing.WriteLockWait = time.Since(lockWaitStartedAt)
 	defer c.writeMu.Unlock()
+
+	frameEncodeStartedAt := time.Now()
+	frame, err := NewFrame(msg)
+	if err != nil {
+		timing.FrameEncode = time.Since(frameEncodeStartedAt)
+		return timing, fmt.Errorf("build websocket frame: %w", err)
+	}
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		timing.FrameEncode = time.Since(frameEncodeStartedAt)
+		return timing, fmt.Errorf("encode websocket frame: %w", err)
+	}
+	timing.FrameEncode = time.Since(frameEncodeStartedAt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.writeTimeout)
 	defer cancel()
 
-	frame, err := NewFrame(msg)
-	if err != nil {
-		return fmt.Errorf("build websocket frame: %w", err)
-	}
-	payload, err := frame.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("encode websocket frame: %w", err)
-	}
+	websocketWriteStartedAt := time.Now()
 	if err := c.conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
-		return fmt.Errorf("send websocket message: %w", err)
+		timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
+		return timing, fmt.Errorf("send websocket message: %w", err)
 	}
-	return nil
+	timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
+	return timing, nil
 }
 
 func (c *WebSocketConnection) Receive() (Message, error) {
