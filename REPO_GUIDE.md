@@ -20,8 +20,8 @@ This repository contains the shared PlexTunnel transport and framing module.
 
 This module is consumed by:
 
-- `github.com/antoinecorbel7/plex-tunnel`
-- `github.com/antoinecorbel7/plex-tunnel-server`
+- `github.com/CRBL-Technologies/plex-tunnel`
+- `github.com/CRBL-Technologies/plex-tunnel-server`
 
 For local multi-repo work, create a parent-level `go.work` from one of the app repos:
 
