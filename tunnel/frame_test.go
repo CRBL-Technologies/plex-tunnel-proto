@@ -74,6 +74,47 @@ func TestFrameMarshalUnmarshalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFrameRegisterAckRoundTripWithSessionFields(t *testing.T) {
+	msg := Message{
+		Type:            MsgRegisterAck,
+		Subdomain:       "app",
+		ProtocolVersion: ProtocolVersion,
+		SessionID:       "sess-123",
+		MaxConnections:  4,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	got, err := decodeMessagePayload(payload)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	if got.Type != msg.Type {
+		t.Fatalf("type = %d, want %d", got.Type, msg.Type)
+	}
+	if got.Subdomain != msg.Subdomain {
+		t.Fatalf("subdomain = %q, want %q", got.Subdomain, msg.Subdomain)
+	}
+	if got.ProtocolVersion != msg.ProtocolVersion {
+		t.Fatalf("protocol_version = %d, want %d", got.ProtocolVersion, msg.ProtocolVersion)
+	}
+	if got.SessionID != msg.SessionID {
+		t.Fatalf("session_id = %q, want %q", got.SessionID, msg.SessionID)
+	}
+	if got.MaxConnections != msg.MaxConnections {
+		t.Fatalf("max_connections = %d, want %d", got.MaxConnections, msg.MaxConnections)
+	}
+}
+
 func TestFrameMessageTypeMismatch(t *testing.T) {
 	msg := Message{Type: MsgPing}
 	frame, err := NewFrame(msg)

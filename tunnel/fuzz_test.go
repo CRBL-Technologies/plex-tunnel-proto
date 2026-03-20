@@ -3,10 +3,12 @@ package tunnel
 import "testing"
 
 func FuzzMessageValidate(f *testing.F) {
-	f.Add(uint8(MsgPing), "", "", "", uint16(0), "", "", 0, false, []byte(nil))
-	f.Add(uint8(MsgRegister), "", "tok", "app", ProtocolVersion, "", "", 0, false, []byte(nil))
-	f.Add(uint8(MsgHTTPRequest), "req-1", "", "", uint16(0), "GET", "/library", 0, true, []byte("body"))
-	f.Add(uint8(MsgHTTPResponse), "req-1", "", "", uint16(0), "", "", 200, true, []byte("resp"))
+	f.Add(uint8(MsgPing), "", "", "", uint16(0), "", 0, "", "", 0, false, []byte(nil))
+	f.Add(uint8(MsgRegister), "", "tok", "app", ProtocolVersion, "", 4, "", "", 0, false, []byte(nil))
+	f.Add(uint8(MsgRegister), "", "tok", "app", ProtocolVersion, "sess-1", 0, "", "", 0, false, []byte(nil))
+	f.Add(uint8(MsgRegisterAck), "", "", "app", ProtocolVersion, "sess-1", 4, "", "", 0, false, []byte(nil))
+	f.Add(uint8(MsgHTTPRequest), "req-1", "", "", uint16(0), "", 0, "GET", "/library", 0, true, []byte("body"))
+	f.Add(uint8(MsgHTTPResponse), "req-1", "", "", uint16(0), "", 0, "", "", 200, true, []byte("resp"))
 
 	f.Fuzz(func(
 		t *testing.T,
@@ -15,6 +17,8 @@ func FuzzMessageValidate(f *testing.F) {
 		token string,
 		subdomain string,
 		protocolVersion uint16,
+		sessionID string,
+		maxConnections int,
 		method string,
 		path string,
 		status int,
@@ -27,6 +31,8 @@ func FuzzMessageValidate(f *testing.F) {
 			Token:           token,
 			Subdomain:       subdomain,
 			ProtocolVersion: protocolVersion,
+			SessionID:       sessionID,
+			MaxConnections:  maxConnections,
 			Method:          method,
 			Path:            path,
 			Status:          status,
@@ -39,8 +45,8 @@ func FuzzMessageValidate(f *testing.F) {
 
 func FuzzFrameMetadataJSON(f *testing.F) {
 	seeds := []Message{
-		{Type: MsgRegister, Token: "tok", Subdomain: "app", ProtocolVersion: ProtocolVersion},
-		{Type: MsgRegisterAck, Subdomain: "app", ProtocolVersion: ProtocolVersion},
+		{Type: MsgRegister, Token: "tok", Subdomain: "app", ProtocolVersion: ProtocolVersion, MaxConnections: 4},
+		{Type: MsgRegisterAck, Subdomain: "app", ProtocolVersion: ProtocolVersion, SessionID: "sess-1", MaxConnections: 4},
 		{Type: MsgHTTPRequest, ID: "req-1", Method: "POST", Path: "/upload", EndStream: true},
 		{Type: MsgHTTPResponse, ID: "req-1", Status: 200, EndStream: true},
 		{Type: MsgWSOpen, ID: "ws-1", Path: "/socket"},
@@ -70,7 +76,8 @@ func FuzzFrameMetadataJSON(f *testing.F) {
 func FuzzFrameDecode(f *testing.F) {
 	seeds := []Message{
 		{Type: MsgPing},
-		{Type: MsgRegister, Token: "tok", Subdomain: "app", ProtocolVersion: ProtocolVersion},
+		{Type: MsgRegister, Token: "tok", Subdomain: "app", ProtocolVersion: ProtocolVersion, MaxConnections: 4},
+		{Type: MsgRegisterAck, Subdomain: "app", ProtocolVersion: ProtocolVersion, SessionID: "sess-1", MaxConnections: 4},
 		{Type: MsgHTTPRequest, ID: "req-1", Method: "POST", Path: "/upload", Body: []byte("payload"), EndStream: true},
 		{Type: MsgHTTPResponse, ID: "req-1", Status: 200, Body: []byte("ok"), EndStream: true},
 		{Type: MsgWSFrame, ID: "ws-1", Body: []byte{0x00, 0x01, 0x02}, WSBinary: true},
