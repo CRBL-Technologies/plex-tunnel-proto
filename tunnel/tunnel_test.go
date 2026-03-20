@@ -510,6 +510,38 @@ func TestWebSocketConnection_LargeBody(t *testing.T) {
 	}
 }
 
+func TestWebSocketConnection_ReceiveAllowsHTTPRequestContinuationChunk(t *testing.T) {
+	client, srv := setupWSPair(t)
+
+	msg := Message{
+		Type: MsgHTTPRequest,
+		ID:   "req-continuation",
+		Body: []byte("chunk-2"),
+	}
+
+	if err := client.Send(msg); err != nil {
+		t.Fatalf("send continuation chunk: %v", err)
+	}
+
+	received, err := srv.Receive()
+	if err != nil {
+		t.Fatalf("receive continuation chunk: %v", err)
+	}
+	if received.Type != MsgHTTPRequest {
+		t.Fatalf("type: got %d, want %d", received.Type, MsgHTTPRequest)
+	}
+	if received.ID != msg.ID {
+		t.Fatalf("id: got %q, want %q", received.ID, msg.ID)
+	}
+	if string(received.Body) != string(msg.Body) {
+		t.Fatalf("body: got %q, want %q", received.Body, msg.Body)
+	}
+
+	if err := received.Validate(); err == nil {
+		t.Fatal("expected application-level validation to reject continuation chunk")
+	}
+}
+
 func TestWebSocketListener_DoubleClose(t *testing.T) {
 	transport := NewWebSocketTransport()
 	ln, err := transport.Listen("127.0.0.1:0")

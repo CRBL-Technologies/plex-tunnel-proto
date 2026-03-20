@@ -156,3 +156,38 @@ func TestUnmarshalFrameCopiesPayload(t *testing.T) {
 		t.Fatal("decoded body unexpectedly changed after payload mutation")
 	}
 }
+
+func TestDecodeMessagePayload_AllowsHTTPRequestContinuationChunk(t *testing.T) {
+	msg := Message{
+		Type: MsgHTTPRequest,
+		ID:   "req-continuation",
+		Body: []byte("chunk-2"),
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	got, err := decodeMessagePayload(payload)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if got.Type != MsgHTTPRequest {
+		t.Fatalf("type = %d, want %d", got.Type, MsgHTTPRequest)
+	}
+	if got.ID != msg.ID {
+		t.Fatalf("id = %q, want %q", got.ID, msg.ID)
+	}
+	if !bytes.Equal(got.Body, msg.Body) {
+		t.Fatalf("body mismatch: got %q, want %q", got.Body, msg.Body)
+	}
+
+	if err := got.Validate(); err == nil {
+		t.Fatal("expected application-level validation to reject continuation chunk")
+	}
+}
