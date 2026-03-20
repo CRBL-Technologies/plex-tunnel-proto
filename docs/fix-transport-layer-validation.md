@@ -1,126 +1,65 @@
-# Fix: Remove Validate() from Transport Layer (v1.1.0)
+# Transport Layer Validation Contract (v1.0.0+)
 
-## Problem
+## Summary
 
-`decodeMessagePayload` in `tunnel/frame.go` calls `msg.Validate()` after decoding every received message. This is wrong: validation is an application-layer concern, not a transport-layer one. The transport layer's job is to faithfully decode whatever bytes it receives; it is not responsible for enforcing message semantics.
+`decodeMessagePayload` and `WebSocketConnection.Receive()` do **not** call `msg.Validate()`. This is intentional and correct. The transport layer decodes whatever bytes it receives; application-level validation is the caller's responsibility.
 
-This causes a real regression in the server/client migration to this proto module.
-
-### Failure scenario
-
-The server streams large HTTP request bodies to the client in chunks (`MsgHTTPRequest`). The streaming protocol sends method/path/headers only on the **first** chunk; continuation chunks carry only `ID` + `Body`:
-
-```
-chunk 1: {Type: MsgHTTPRequest, ID: "x", Method: "POST", Path: "/...", Headers: {...}, Body: [...64KB...]}
-chunk 2: {Type: MsgHTTPRequest, ID: "x", Body: [...64KB...]}   ← no Method, no Path
-chunk 3: {Type: MsgHTTPRequest, ID: "x", Body: [...], EndStream: true}
-```
-
-Because `Validate()` requires `Method != ""` and `Path != ""` for every `MsgHTTPRequest`, the client's `conn.Receive()` returns an error on chunk 2. The client treats any receive error as fatal and terminates the entire session, dropping all in-flight requests and triggering a reconnect with backoff.
-
-For GET requests (most Plex streaming), there is no request body so only one chunk is ever sent and it always passes validation. This is why the issue shows up as slow or intermittent bandwidth rather than a total outage — it only fires on POST/PUT requests with bodies larger than 64 KB (e.g. Plex sync, playlist creation, large XML payloads).
-
-### Why Validate() does not belong here
-
-`Validate()` enforces application-level invariants: required fields, valid field combinations. These rules are defined by the application protocol, not the wire format. The wire format (frame header + JSON metadata + binary body) is self-describing and does not require semantic validation to be decoded.
-
-Putting `Validate()` in the decode path creates tight coupling between the transport layer and application semantics. Any future protocol extension that adds a new message type or relaxes a field requirement would break all callers silently at the receive layer rather than visibly at the application layer.
+The regression tests added in this branch (`TestDecodeMessagePayload_AllowsHTTPRequestContinuationChunk`, `TestWebSocketConnection_ReceiveAllowsHTTPRequestContinuationChunk`) protect this contract from accidental regression.
 
 ---
 
-## Fix
+## Background
 
-### 1. Remove `Validate()` from `decodeMessagePayload`
+The old local `pkg/tunnel` implementations (in both `plex-tunnel` and `plex-tunnel-server` before their migration to this module) called `msg.Validate()` inside `decodeMessagePayload`. This was incorrect. The streaming protocol intentionally sends `MsgHTTPRequest` continuation chunks without `Method` or `Path` — only the first chunk carries them. Because the old `Validate()` required both fields unconditionally on every `MsgHTTPRequest`, any POST/PUT request with a body larger than 64 KB would cause `decodeMessagePayload` to return an error at the client, which terminated the entire tunnel session.
 
-**`tunnel/frame.go`**
+This proto module was written with the correct design from the start: the transport decodes, the application validates.
 
-```go
-// Before
-func decodeMessagePayload(payload []byte) (Message, error) {
-    frame, err := UnmarshalFrame(payload)
-    if err != nil {
-        return Message{}, fmt.Errorf("decode frame: %w", err)
-    }
-    msg, err := frame.Message()
-    if err != nil {
-        return Message{}, fmt.Errorf("decode frame message: %w", err)
-    }
-    // Remove this:
-    if err := msg.Validate(); err != nil {
-        return Message{}, fmt.Errorf("validate message: %w", err)
-    }
-    return msg, nil
-}
+---
 
-// After
-func decodeMessagePayload(payload []byte) (Message, error) {
-    frame, err := UnmarshalFrame(payload)
-    if err != nil {
-        return Message{}, fmt.Errorf("decode frame: %w", err)
-    }
-    msg, err := frame.Message()
-    if err != nil {
-        return Message{}, fmt.Errorf("decode frame message: %w", err)
-    }
-    return msg, nil
-}
-```
+## The contract
 
-### 2. Callers must validate themselves
+| Layer | Responsibility |
+|---|---|
+| `decodeMessagePayload` / `Receive()` | Decode the wire format faithfully. Return an error only for malformed frames (bad length prefix, JSON syntax error, frame type mismatch). |
+| Application code | Call `msg.Validate()` explicitly when it needs to enforce message semantics. |
 
-Applications that need to validate received messages should call `msg.Validate()` themselves after receiving:
+### Example: correct application-layer validation
 
 ```go
 msg, err := conn.Receive()
 if err != nil {
-    // handle
+    // wire-level error: bad frame, connection closed, timeout
+    return err
 }
 if err := msg.Validate(); err != nil {
-    // handle invalid message — log, skip, or close connection
-    // depending on application policy
+    // semantic error: missing required field for this message type
+    // application decides whether to log, skip, or close
+    continue
 }
 ```
 
-The server already does this (`server.go` line 300). The client does not need to validate received messages in the streaming path — it trusts the server.
+### Continuation chunks
 
-### 3. Remove the redundant Validate() call in the server
-
-Once the proto no longer validates on decode, the explicit `msg.Validate()` call in the server's tunnel receive loop becomes the sole validation point — which is correct. No change needed in the server; it already validates explicitly.
-
----
-
-## Release
-
-Tag as **v1.1.0** (minor bump — the removal of `Validate()` from the decode path is a behavioral change but not an API-breaking one; `Validate()` remains exported and callable by application code).
-
-**Changelog entry:**
-
-```
-v1.1.0
-- fix: remove Validate() from decodeMessagePayload — validation is an
-  application-layer concern; the transport layer now faithfully decodes
-  all frames regardless of field completeness. Callers that need
-  validation should call msg.Validate() explicitly after Receive().
-```
-
----
-
-## Short-term workaround (server, until v1.1.0 is released)
-
-In `pkg/server/server.go`, `sendHTTPRequestStream`: always include `Method` and `Path` in every request chunk, not just the first. Skip `Headers` on continuation chunks to avoid bloat:
+A `MsgHTTPRequest` continuation chunk is a legitimate wire message:
 
 ```go
-msg := tunnel.Message{
-    Type:      tunnel.MsgHTTPRequest,
-    ID:        requestID,
-    Method:    method,
-    Path:      requestPath,
-    Body:      chunk,
-    EndStream: finalChunk,
-}
-if !sentRequestStart {
-    msg.Headers = headers
+// Valid to send and receive — carries only ID and body, no Method/Path
+tunnel.Message{
+    Type: tunnel.MsgHTTPRequest,
+    ID:   "req-abc",
+    Body: []byte("..."),
 }
 ```
 
-This ensures all chunks pass the proto's current `Validate()` check. The overhead is `Method` + `Path` in the JSON metadata of each continuation chunk — typically under 100 bytes per chunk, negligible against a 64 KB body.
+`Receive()` returns it without error. `msg.Validate()` correctly rejects it at the application layer (Method and Path are missing). The application must decide what to do — typically correlating it with an in-flight request by ID, not re-validating it as a standalone message.
+
+---
+
+## What the regression tests verify
+
+`TestDecodeMessagePayload_AllowsHTTPRequestContinuationChunk` and `TestWebSocketConnection_ReceiveAllowsHTTPRequestContinuationChunk` assert two things:
+
+1. `decodeMessagePayload` / `Receive()` does **not** return an error for a continuation chunk — the transport accepts it.
+2. `msg.Validate()` **does** return an error for the same chunk — the application layer correctly identifies it as semantically incomplete.
+
+If someone accidentally adds `Validate()` back into the decode path, both tests fail immediately.
