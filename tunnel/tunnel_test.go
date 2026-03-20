@@ -212,6 +212,44 @@ func TestWebSocketConnection_SendReceiveReverse(t *testing.T) {
 	}
 }
 
+func TestWebSocketConnection_SendWithTiming(t *testing.T) {
+	client, srv := setupWSPair(t)
+
+	msg := Message{
+		Type:   MsgHTTPRequest,
+		ID:     "req-timed",
+		Method: "GET",
+		Path:   "/timed",
+		Body:   []byte("hello"),
+	}
+
+	timing, err := client.SendWithTiming(msg)
+	if err != nil {
+		t.Fatalf("client send with timing: %v", err)
+	}
+
+	if timing.WriteLockWait < 0 {
+		t.Fatalf("write lock wait: got %v, want >= 0", timing.WriteLockWait)
+	}
+	if timing.FrameEncode < 0 {
+		t.Fatalf("frame encode: got %v, want >= 0", timing.FrameEncode)
+	}
+	if timing.WebSocketWrite < 0 {
+		t.Fatalf("websocket write: got %v, want >= 0", timing.WebSocketWrite)
+	}
+	if timing.Total() != timing.WriteLockWait+timing.FrameEncode+timing.WebSocketWrite {
+		t.Fatalf("total timing mismatch: got %v", timing.Total())
+	}
+
+	received, err := srv.Receive()
+	if err != nil {
+		t.Fatalf("server receive: %v", err)
+	}
+	if received.ID != msg.ID {
+		t.Fatalf("id: got %q, want %q", received.ID, msg.ID)
+	}
+}
+
 func TestWebSocketConnection_PingPong(t *testing.T) {
 	client, srv := setupWSPair(t)
 
