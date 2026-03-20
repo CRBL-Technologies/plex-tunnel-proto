@@ -58,7 +58,7 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register message missing protocol_version")
 		}
-		if m.ProtocolVersion == ProtocolVersion && m.MaxConnections < 1 {
+		if m.ProtocolVersion == ProtocolVersion && m.SessionID == "" && m.MaxConnections < 1 {
 			return errors.New("register message missing or invalid max_connections")
 		}
 	case MsgRegisterAck:

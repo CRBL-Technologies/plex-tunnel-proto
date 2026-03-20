@@ -19,6 +19,7 @@ func TestMessageValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "register ok", msg: Message{Type: MsgRegister, Token: "abc", ProtocolVersion: ProtocolVersion, MaxConnections: 4}},
+		{name: "register join ok without max connections", msg: Message{Type: MsgRegister, Token: "abc", ProtocolVersion: ProtocolVersion, SessionID: "sess-1"}},
 		{name: "register missing token", msg: Message{Type: MsgRegister, ProtocolVersion: ProtocolVersion, MaxConnections: 4}, wantErr: true},
 		{name: "register missing protocol version", msg: Message{Type: MsgRegister, Token: "abc", MaxConnections: 4}, wantErr: true},
 		{name: "register missing max connections", msg: Message{Type: MsgRegister, Token: "abc", ProtocolVersion: ProtocolVersion}, wantErr: true},

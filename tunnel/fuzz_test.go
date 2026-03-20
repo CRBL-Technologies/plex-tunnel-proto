@@ -5,6 +5,7 @@ import "testing"
 func FuzzMessageValidate(f *testing.F) {
 	f.Add(uint8(MsgPing), "", "", "", uint16(0), "", 0, "", "", 0, false, []byte(nil))
 	f.Add(uint8(MsgRegister), "", "tok", "app", ProtocolVersion, "", 4, "", "", 0, false, []byte(nil))
+	f.Add(uint8(MsgRegister), "", "tok", "app", ProtocolVersion, "sess-1", 0, "", "", 0, false, []byte(nil))
 	f.Add(uint8(MsgRegisterAck), "", "", "app", ProtocolVersion, "sess-1", 4, "", "", 0, false, []byte(nil))
 	f.Add(uint8(MsgHTTPRequest), "req-1", "", "", uint16(0), "", 0, "GET", "/library", 0, true, []byte("body"))
 	f.Add(uint8(MsgHTTPResponse), "req-1", "", "", uint16(0), "", 0, "", "", 200, true, []byte("resp"))
