@@ -23,6 +23,8 @@ type frameMetadata struct {
 	Token           string              `json:"token,omitempty"`
 	Subdomain       string              `json:"subdomain,omitempty"`
 	ProtocolVersion uint16              `json:"protocol_version,omitempty"`
+	SessionID       string              `json:"session_id,omitempty"`
+	MaxConnections  int                 `json:"max_connections,omitempty"`
 	Method          string              `json:"method,omitempty"`
 	Path            string              `json:"path,omitempty"`
 	Headers         map[string][]string `json:"headers,omitempty"`
@@ -125,6 +127,8 @@ func encodeFrameMetadata(msg Message) ([]byte, error) {
 		Token:           msg.Token,
 		Subdomain:       msg.Subdomain,
 		ProtocolVersion: msg.ProtocolVersion,
+		SessionID:       msg.SessionID,
+		MaxConnections:  msg.MaxConnections,
 		Method:          msg.Method,
 		Path:            msg.Path,
 		Headers:         msg.Headers,
@@ -157,6 +161,8 @@ func decodeFrameMetadata(header []byte) (Message, error) {
 		Token:           meta.Token,
 		Subdomain:       meta.Subdomain,
 		ProtocolVersion: meta.ProtocolVersion,
+		SessionID:       meta.SessionID,
+		MaxConnections:  meta.MaxConnections,
 		Method:          meta.Method,
 		Path:            meta.Path,
 		Headers:         meta.Headers,

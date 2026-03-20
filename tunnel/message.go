@@ -22,7 +22,7 @@ const (
 	MsgKeyExchange // reserved for future end-to-end encryption key exchange
 )
 
-const ProtocolVersion uint16 = 1
+const ProtocolVersion uint16 = 2
 
 type Message struct {
 	Type      MessageType `json:"type"`
@@ -30,12 +30,16 @@ type Message struct {
 	Token     string      `json:"token,omitempty"`
 	Subdomain string      `json:"subdomain,omitempty"`
 	// ProtocolVersion is negotiated during register/register-ack handshake.
-	ProtocolVersion uint16              `json:"protocol_version,omitempty"`
-	Method          string              `json:"method,omitempty"`
-	Path            string              `json:"path,omitempty"`
-	Headers         map[string][]string `json:"headers,omitempty"`
-	Body            []byte              `json:"-"`
-	Status          int                 `json:"status,omitempty"`
+	ProtocolVersion uint16 `json:"protocol_version,omitempty"`
+	// SessionID identifies the logical tunnel session in protocol v2.
+	SessionID string `json:"session_id,omitempty"`
+	// MaxConnections is the requested/granted parallel connection count in protocol v2.
+	MaxConnections int                 `json:"max_connections,omitempty"`
+	Method         string              `json:"method,omitempty"`
+	Path           string              `json:"path,omitempty"`
+	Headers        map[string][]string `json:"headers,omitempty"`
+	Body           []byte              `json:"-"`
+	Status         int                 `json:"status,omitempty"`
 	// EndStream marks the final frame for a request/response stream identified
 	// by ID. For streamed HTTP requests, method/path/headers are sent on the
 	// first frame only; continuation frames carry body chunks plus EndStream.
@@ -54,12 +58,23 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register message missing protocol_version")
 		}
+		if m.ProtocolVersion == ProtocolVersion && m.MaxConnections < 1 {
+			return errors.New("register message missing or invalid max_connections")
+		}
 	case MsgRegisterAck:
 		if m.Subdomain == "" {
 			return errors.New("register ack missing subdomain")
 		}
 		if m.ProtocolVersion == 0 {
 			return errors.New("register ack missing protocol_version")
+		}
+		if m.ProtocolVersion == ProtocolVersion {
+			if m.SessionID == "" {
+				return errors.New("register ack missing session_id")
+			}
+			if m.MaxConnections < 1 {
+				return errors.New("register ack missing or invalid max_connections")
+			}
 		}
 	case MsgHTTPRequest:
 		if m.ID == "" {
