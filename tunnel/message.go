@@ -16,10 +16,11 @@ const (
 	MsgPing
 	MsgPong
 	MsgError
-	MsgWSOpen      // server asks client to open a WebSocket to local upstream
-	MsgWSFrame     // a WebSocket frame forwarded in either direction
-	MsgWSClose     // signals that the WebSocket session should be torn down
-	MsgKeyExchange // reserved for future end-to-end encryption key exchange
+	MsgWSOpen               // server asks client to open a WebSocket to local upstream
+	MsgWSFrame              // a WebSocket frame forwarded in either direction
+	MsgWSClose              // signals that the WebSocket session should be torn down
+	MsgKeyExchange          // reserved for future end-to-end encryption key exchange
+	MsgMaxConnectionsUpdate // server tells client to adjust its connection pool size
 )
 
 const ProtocolVersion uint16 = 2
@@ -116,6 +117,10 @@ func (m Message) Validate() error {
 	case MsgKeyExchange:
 		if m.ID == "" {
 			return errors.New("key exchange message missing id")
+		}
+	case MsgMaxConnectionsUpdate:
+		if m.MaxConnections < 1 {
+			return errors.New("max connections update missing or invalid max_connections")
 		}
 	default:
 		return fmt.Errorf("unknown message type: %d", m.Type)
