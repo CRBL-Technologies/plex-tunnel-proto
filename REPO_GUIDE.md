@@ -1,6 +1,6 @@
 # Repository Guide
 
-This repository contains the shared PlexTunnel transport and framing module.
+This repository contains the shared Portless transport and framing module.
 
 ## Main Files
 
