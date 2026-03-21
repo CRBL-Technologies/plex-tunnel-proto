@@ -1,6 +1,6 @@
-# PlexTunnel Proto
+# Portless Proto
 
-`plex-tunnel-proto` is the shared transport and framing module used by both:
+`plex-tunnel-proto` is the shared transport and framing module used by both Portless repositories:
 
 - `https://github.com/CRBL-Technologies/plex-tunnel`
 - `https://github.com/CRBL-Technologies/plex-tunnel-server`
