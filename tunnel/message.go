@@ -21,6 +21,7 @@ const (
 	MsgWSClose              // signals that the WebSocket session should be torn down
 	MsgKeyExchange          // reserved for future end-to-end encryption key exchange
 	MsgMaxConnectionsUpdate // server tells client to adjust its connection pool size
+	MsgCancel               // server tells client to abort an in-flight request (e.g. downstream disconnect)
 )
 
 const ProtocolVersion uint16 = 2
@@ -121,6 +122,10 @@ func (m Message) Validate() error {
 	case MsgMaxConnectionsUpdate:
 		if m.MaxConnections < 1 {
 			return errors.New("max connections update missing or invalid max_connections")
+		}
+	case MsgCancel:
+		if m.ID == "" {
+			return errors.New("cancel message missing id")
 		}
 	default:
 		return fmt.Errorf("unknown message type: %d", m.Type)
