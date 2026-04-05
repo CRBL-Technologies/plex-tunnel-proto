@@ -130,11 +130,11 @@ func setupWSPair(t *testing.T) (client *WebSocketConnection, srv *WebSocketConne
 		t.Fatalf("dial websocket: %v", err)
 	}
 	// Use CloseNow (via underlying conn) to avoid blocking close handshake in cleanup.
-	t.Cleanup(func() { clientConn.conn.CloseNow() })
+	t.Cleanup(func() { _ = clientConn.conn.CloseNow() })
 
 	select {
 	case srvConn := <-serverReady:
-		t.Cleanup(func() { srvConn.conn.CloseNow() })
+		t.Cleanup(func() { _ = srvConn.conn.CloseNow() })
 		return clientConn, srvConn
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for server-side connection")
@@ -377,7 +377,7 @@ func TestWebSocketTransport_DialUnreachable(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -396,7 +396,7 @@ func TestDialWebSocket_WithHeaders(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.conn.CloseNow()
+		defer func() { _ = conn.conn.CloseNow() }()
 		_, _ = conn.Receive()
 	}))
 	defer ts.Close()
@@ -413,7 +413,7 @@ func TestDialWebSocket_WithHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.conn.CloseNow()
+	defer func() { _ = conn.conn.CloseNow() }()
 
 	if receivedHeaders.Get("X-Custom-Header") != "custom-value" {
 		t.Fatalf("custom header not received, got headers: %v", receivedHeaders)
@@ -426,7 +426,7 @@ func TestDialWebSocket_RemoteAddrIsParsed(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.conn.CloseNow()
+		defer func() { _ = conn.conn.CloseNow() }()
 		_, _ = conn.Receive()
 	}))
 	defer ts.Close()
@@ -439,7 +439,7 @@ func TestDialWebSocket_RemoteAddrIsParsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.conn.CloseNow()
+	defer func() { _ = conn.conn.CloseNow() }()
 
 	addr := conn.RemoteAddr()
 	if addr == "" {
