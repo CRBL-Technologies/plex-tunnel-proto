@@ -72,6 +72,12 @@ func (f Frame) MarshalBinary() ([]byte, error) {
 	return payload, nil
 }
 
+// maxFrameComponentSize limits individual header/body lengths to prevent
+// integer overflow on 32-bit systems where int is 32 bits. The value is
+// well below math.MaxInt32 to ensure frameHeaderSize + headerLen + bodyLen
+// cannot overflow.
+const maxFrameComponentSize = 1<<30 - 1 // ~1 GB
+
 func UnmarshalFrame(payload []byte) (Frame, error) {
 	if len(payload) < frameHeaderSize {
 		return Frame{}, fmt.Errorf("frame too short: %d bytes", len(payload))
@@ -79,6 +85,9 @@ func UnmarshalFrame(payload []byte) (Frame, error) {
 
 	headerLen := int(binary.BigEndian.Uint32(payload[1:5]))
 	bodyLen := int(binary.BigEndian.Uint32(payload[5:9]))
+	if headerLen < 0 || headerLen > maxFrameComponentSize || bodyLen < 0 || bodyLen > maxFrameComponentSize {
+		return Frame{}, fmt.Errorf("frame component length out of range: header=%d body=%d", headerLen, bodyLen)
+	}
 	expectedLen := frameHeaderSize + headerLen + bodyLen
 	if expectedLen != len(payload) {
 		return Frame{}, fmt.Errorf(
@@ -120,7 +129,18 @@ func (f Frame) Message() (Message, error) {
 	return msg, nil
 }
 
+// maxMetadataSize limits the JSON metadata to 1 MB to prevent unbounded
+// memory allocation from large Headers maps or other metadata fields.
+const maxMetadataSize = 1 * 1024 * 1024
+
+// maxHeaderEntries limits the number of header keys to prevent OOM from
+// an attacker sending millions of tiny headers.
+const maxHeaderEntries = 256
+
 func encodeFrameMetadata(msg Message) ([]byte, error) {
+	if len(msg.Headers) > maxHeaderEntries {
+		return nil, fmt.Errorf("too many header entries: %d (max %d)", len(msg.Headers), maxHeaderEntries)
+	}
 	meta := frameMetadata{
 		Type:            msg.Type,
 		ID:              msg.ID,
@@ -143,6 +163,9 @@ func encodeFrameMetadata(msg Message) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode frame metadata: %w", err)
 	}
+	if len(header) > maxMetadataSize {
+		return nil, fmt.Errorf("frame metadata too large: %d bytes (max %d)", len(header), maxMetadataSize)
+	}
 	return header, nil
 }
 
@@ -150,10 +173,16 @@ func decodeFrameMetadata(header []byte) (Message, error) {
 	if len(header) == 0 {
 		return Message{}, nil
 	}
+	if len(header) > maxMetadataSize {
+		return Message{}, fmt.Errorf("frame metadata too large: %d bytes (max %d)", len(header), maxMetadataSize)
+	}
 
 	var meta frameMetadata
 	if err := json.Unmarshal(header, &meta); err != nil {
-		return Message{}, fmt.Errorf("decode frame metadata: %w", err)
+		return Message{}, fmt.Errorf("decode frame metadata: invalid metadata")
+	}
+	if len(meta.Headers) > maxHeaderEntries {
+		return Message{}, fmt.Errorf("too many header entries: %d (max %d)", len(meta.Headers), maxHeaderEntries)
 	}
 	return Message{
 		Type:            meta.Type,
