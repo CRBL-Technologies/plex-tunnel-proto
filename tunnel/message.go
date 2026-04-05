@@ -60,7 +60,10 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register message missing protocol_version")
 		}
-		if m.ProtocolVersion == ProtocolVersion && m.SessionID == "" && m.MaxConnections < 1 {
+		if m.ProtocolVersion < ProtocolVersion {
+			return fmt.Errorf("unsupported protocol version %d (minimum %d)", m.ProtocolVersion, ProtocolVersion)
+		}
+		if m.SessionID == "" && m.MaxConnections < 1 {
 			return errors.New("register message missing or invalid max_connections")
 		}
 	case MsgRegisterAck:
@@ -70,13 +73,11 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register ack missing protocol_version")
 		}
-		if m.ProtocolVersion == ProtocolVersion {
-			if m.SessionID == "" {
-				return errors.New("register ack missing session_id")
-			}
-			if m.MaxConnections < 1 {
-				return errors.New("register ack missing or invalid max_connections")
-			}
+		if m.SessionID == "" {
+			return errors.New("register ack missing session_id")
+		}
+		if m.MaxConnections < 1 {
+			return errors.New("register ack missing or invalid max_connections")
 		}
 	case MsgHTTPRequest:
 		if m.ID == "" {
