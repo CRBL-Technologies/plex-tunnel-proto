@@ -9,8 +9,29 @@ import (
 
 const frameHeaderSize = 9
 
-// Frame is the binary tunnel transport unit:
-// [1 byte type][4 bytes metadata length][4 bytes body length][metadata][body].
+// Frame is the binary tunnel transport unit.
+//
+// Wire format (big-endian / network byte order):
+//
+//	Offset  Size  Field
+//	─────────────────────────────────────
+//	 0       1    Message type (uint8)
+//	 1       4    Metadata length in bytes (uint32, big-endian)
+//	 5       4    Body length in bytes (uint32, big-endian)
+//	 9       N    JSON-encoded metadata (N = metadata length)
+//	 9+N     M    Binary body (M = body length)
+//
+// Total frame size = 9 + N + M bytes.
+//
+// The message type byte doubles as an implicit version indicator: valid
+// types are in [1, 13] for protocol v2. A receiver that encounters a type
+// outside this range should treat the frame as incompatible.
+//
+// There is no explicit per-frame version field. Forward compatibility is
+// handled at the protocol level via the ProtocolVersion negotiated during
+// the Register/RegisterAck handshake. If the wire format changes in a
+// future protocol version, the handshake will reject incompatible peers
+// before any data frames are exchanged.
 type Frame struct {
 	Type   MessageType
 	Header []byte
@@ -35,6 +56,8 @@ type frameMetadata struct {
 	Encrypted       bool                `json:"encrypted,omitempty"`
 }
 
+// NewFrame encodes a Message into a Frame ready for binary serialization.
+// Returns an error if the metadata or body exceeds size limits.
 func NewFrame(msg Message) (Frame, error) {
 	header, err := encodeFrameMetadata(msg)
 	if err != nil {
@@ -53,6 +76,7 @@ func NewFrame(msg Message) (Frame, error) {
 	}, nil
 }
 
+// MarshalBinary serializes the frame into the wire format.
 func (f Frame) MarshalBinary() ([]byte, error) {
 	// Frame is exported, so callers may construct it directly without NewFrame.
 	// Keep length guards here as a final validation layer.
@@ -78,6 +102,7 @@ func (f Frame) MarshalBinary() ([]byte, error) {
 // cannot overflow.
 const maxFrameComponentSize = 1<<30 - 1 // ~1 GB
 
+// UnmarshalFrame parses a wire-format payload into a Frame.
 func UnmarshalFrame(payload []byte) (Frame, error) {
 	if len(payload) < frameHeaderSize {
 		return Frame{}, fmt.Errorf("frame too short: %d bytes", len(payload))
