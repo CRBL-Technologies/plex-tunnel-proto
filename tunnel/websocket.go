@@ -44,7 +44,7 @@ func (t *WebSocketTransport) Listen(addr string) (Listener, error) {
 	l := &websocketListener{
 		ln:    ln,
 		conns: make(chan Connection, 64),
-		errCh: make(chan error, 1),
+		errCh: make(chan error, 2),
 		done:  make(chan struct{}),
 	}
 
@@ -85,6 +85,8 @@ func AcceptWebSocket(w http.ResponseWriter, r *http.Request) (*WebSocketConnecti
 	return acceptWebSocket(w, r, defaultReadTimeout, defaultWriteTimeout)
 }
 
+const defaultHandshakeTimeout = 15 * time.Second
+
 func dialWebSocket(
 	ctx context.Context,
 	rawURL string,
@@ -92,6 +94,12 @@ func dialWebSocket(
 	readTimeout time.Duration,
 	writeTimeout time.Duration,
 ) (*WebSocketConnection, error) {
+	// Ensure a deadline exists so the handshake can't hang indefinitely.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultHandshakeTimeout)
+		defer cancel()
+	}
 	dialOpts := &websocket.DialOptions{HTTPHeader: headers}
 	wsConn, resp, err := websocket.Dial(ctx, rawURL, dialOpts)
 	if err != nil {
@@ -193,10 +201,14 @@ func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
 }
 
 func (c *WebSocketConnection) Receive() (Message, error) {
-	ctx := context.Background()
+	return c.ReceiveContext(context.Background())
+}
+
+func (c *WebSocketConnection) ReceiveContext(parent context.Context) (Message, error) {
+	ctx := parent
 	cancel := func() {}
 	if c.readTimeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), c.readTimeout)
+		ctx, cancel = context.WithTimeout(parent, c.readTimeout)
 	}
 	defer cancel()
 
