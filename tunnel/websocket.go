@@ -8,14 +8,19 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nhooyr.io/websocket"
 )
 
 const (
-	defaultReadTimeout  = 70 * time.Second
-	defaultWriteTimeout = 60 * time.Second
+	// defaultReadTimeout bounds the time for a single WebSocket message read.
+	// This covers the full message including body, so it must accommodate
+	// large payloads (~8 MB) on moderate connections. The server's per-request
+	// timeout provides an outer bound; this timeout catches stuck reads.
+	defaultReadTimeout  = 30 * time.Second
+	defaultWriteTimeout = 30 * time.Second
 	defaultReadLimit    = int64(8 * 1024 * 1024)
 )
 
@@ -43,13 +48,19 @@ func (t *WebSocketTransport) Listen(addr string) (Listener, error) {
 
 	l := &websocketListener{
 		ln:    ln,
-		conns: make(chan Connection, 64),
+		conns: make(chan Connection, 256),
 		errCh: make(chan error, 2),
 		done:  make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}()
+
 		conn, err := acceptWebSocket(w, r, t.readTimeout(), t.writeTimeout())
 		if err != nil {
 			return
@@ -81,6 +92,11 @@ func DialWebSocket(ctx context.Context, rawURL string, headers http.Header) (*We
 	return dialWebSocket(ctx, rawURL, headers, defaultReadTimeout, defaultWriteTimeout)
 }
 
+// AcceptWebSocket upgrades the HTTP request to a WebSocket connection.
+// Origin validation is intentionally disabled (InsecureSkipVerify) because
+// this is a tunnel transport: the server accepts connections from tunnel
+// clients whose origin is not a browser page. Callers that need CSRF
+// protection should validate the Origin header before calling this function.
 func AcceptWebSocket(w http.ResponseWriter, r *http.Request) (*WebSocketConnection, error) {
 	return acceptWebSocket(w, r, defaultReadTimeout, defaultWriteTimeout)
 }
@@ -137,6 +153,7 @@ type WebSocketConnection struct {
 	writeTimeout time.Duration
 	Encrypted    bool // reserved for future end-to-end encryption negotiation
 	writeMu      sync.Mutex
+	lastActivity atomic.Int64 // unix nano timestamp of last send or receive
 }
 
 type SendTiming struct {
@@ -154,12 +171,14 @@ func newWebSocketConnection(conn *websocket.Conn, remoteAddr string, readTimeout
 	// for proxied HTTP chunks and causes read-limited disconnects.
 	conn.SetReadLimit(defaultReadLimit)
 
-	return &WebSocketConnection{
+	c := &WebSocketConnection{
 		conn:         conn,
 		remoteAddr:   remoteAddr,
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
 	}
+	c.touchActivity()
+	return c
 }
 
 func (c *WebSocketConnection) Send(msg Message) error {
@@ -197,6 +216,7 @@ func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
 		return timing, fmt.Errorf("send websocket message: %w", err)
 	}
 	timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
+	c.touchActivity()
 	return timing, nil
 }
 
@@ -223,6 +243,7 @@ func (c *WebSocketConnection) ReceiveContext(parent context.Context) (Message, e
 	if err != nil {
 		return Message{}, fmt.Errorf("receive websocket message: %w", err)
 	}
+	c.touchActivity()
 	return msg, nil
 }
 
@@ -232,6 +253,19 @@ func (c *WebSocketConnection) Close() error {
 
 func (c *WebSocketConnection) RemoteAddr() string {
 	return c.remoteAddr
+}
+
+// IdleDuration returns how long the connection has been idle (no sends or receives).
+func (c *WebSocketConnection) IdleDuration() time.Duration {
+	last := c.lastActivity.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, last))
+}
+
+func (c *WebSocketConnection) touchActivity() {
+	c.lastActivity.Store(time.Now().UnixNano())
 }
 
 type websocketListener struct {
