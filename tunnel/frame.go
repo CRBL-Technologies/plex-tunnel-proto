@@ -96,11 +96,11 @@ func (f Frame) MarshalBinary() ([]byte, error) {
 	return payload, nil
 }
 
-// maxFrameComponentSize limits individual header/body lengths to prevent
-// integer overflow on 32-bit systems where int is 32 bits. The value is
-// well below math.MaxInt32 to ensure frameHeaderSize + headerLen + bodyLen
-// cannot overflow.
-const maxFrameComponentSize = 1<<30 - 1 // ~1 GB
+// maxFrameComponentSize limits individual header/body lengths so that
+// frameHeaderSize + headerLen + bodyLen cannot overflow int on 32-bit
+// GOARCH (where int is int32). Two components at this cap plus the 9-byte
+// frame header stay within math.MaxInt32.
+const maxFrameComponentSize = (math.MaxInt32 - frameHeaderSize) / 2
 
 // UnmarshalFrame parses a wire-format payload into a Frame.
 func UnmarshalFrame(payload []byte) (Frame, error) {

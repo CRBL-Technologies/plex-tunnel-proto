@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -195,5 +196,26 @@ func TestUnmarshalFrameCopiesPayload(t *testing.T) {
 	}
 	if bytes.Equal(decoded.Body, make([]byte, len(decoded.Body))) {
 		t.Fatal("decoded body unexpectedly changed after payload mutation")
+	}
+}
+
+func TestMaxFrameComponentSizeBounds(t *testing.T) {
+	// Two max-size components plus the frame header must not overflow int32.
+	sum := int64(frameHeaderSize) + 2*int64(maxFrameComponentSize)
+	if sum > int64(math.MaxInt32) {
+		t.Fatalf("maxFrameComponentSize too large: 2*%d + %d = %d exceeds math.MaxInt32 (%d)",
+			maxFrameComponentSize, frameHeaderSize, sum, math.MaxInt32)
+	}
+}
+
+func TestUnmarshalFrameRejectsOversizeComponent(t *testing.T) {
+	payload := make([]byte, frameHeaderSize)
+	payload[0] = byte(MsgHTTPRequest)
+	binary.BigEndian.PutUint32(payload[1:5], uint32(maxFrameComponentSize+1))
+	binary.BigEndian.PutUint32(payload[5:9], 0)
+
+	_, err := UnmarshalFrame(payload)
+	if err == nil {
+		t.Fatal("expected oversize component error")
 	}
 }

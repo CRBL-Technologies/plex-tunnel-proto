@@ -79,6 +79,9 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register ack missing protocol_version")
 		}
+		if m.ProtocolVersion < ProtocolVersion {
+			return fmt.Errorf("unsupported protocol version %d (minimum %d)", m.ProtocolVersion, ProtocolVersion)
+		}
 		if m.SessionID == "" {
 			return errors.New("register ack missing session_id")
 		}
