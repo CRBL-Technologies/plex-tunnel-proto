@@ -80,3 +80,51 @@ func TestMsgCancelValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestMsgRegisterAckValidateProtocolVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version uint16
+		wantErr bool
+	}{
+		{
+			name:    "current protocol version valid",
+			version: ProtocolVersion,
+		},
+		{
+			name:    "zero protocol version invalid",
+			version: 0,
+			wantErr: true,
+		},
+		{
+			name:    "explicit v1 downgrade invalid",
+			version: 1,
+			wantErr: true,
+		},
+		{
+			name:    "protocol version minus one invalid",
+			version: ProtocolVersion - 1,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := Message{
+				Type:            MsgRegisterAck,
+				Subdomain:       "app",
+				ProtocolVersion: tc.version,
+				SessionID:       "sess-123",
+				MaxConnections:  4,
+			}
+
+			err := msg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+		})
+	}
+}
