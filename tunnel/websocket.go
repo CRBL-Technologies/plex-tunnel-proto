@@ -152,7 +152,15 @@ type WebSocketConnection struct {
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 	Encrypted    bool // reserved for future end-to-end encryption negotiation
-	writeMu      sync.Mutex
+	// writeLock is a 1-buffered channel acting as a ctx-aware binary semaphore.
+	// Acquisition selects on ctx.Done and closed, so waiters can abort on
+	// context cancellation or connection teardown instead of blocking on an
+	// uninterruptible Mutex.Lock.
+	writeLock chan struct{}
+	// closed is closed exactly once by Close so in-flight and queued
+	// SendContext callers unblock instead of waiting up to writeTimeout.
+	closed       chan struct{}
+	closeOnce    sync.Once
 	lastActivity atomic.Int64 // unix nano timestamp of last send or receive
 }
 
@@ -176,23 +184,35 @@ func newWebSocketConnection(conn *websocket.Conn, remoteAddr string, readTimeout
 		remoteAddr:   remoteAddr,
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
+		writeLock:    make(chan struct{}, 1),
+		closed:       make(chan struct{}),
 	}
 	c.touchActivity()
 	return c
 }
 
-func (c *WebSocketConnection) Send(msg Message) error {
-	_, err := c.SendWithTiming(msg)
-	return err
-}
-
-func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
+// sendContextWithTiming is the internal workhorse for all send paths.
+// ctx governs both lock acquisition and the underlying WebSocket write.
+// A nil ctx is treated as context.Background() - but public callers should
+// always pass a concrete context.
+func (c *WebSocketConnection) sendContextWithTiming(ctx context.Context, msg Message) (SendTiming, error) {
 	var timing SendTiming
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	lockWaitStartedAt := time.Now()
-	c.writeMu.Lock()
-	timing.WriteLockWait = time.Since(lockWaitStartedAt)
-	defer c.writeMu.Unlock()
+	select {
+	case c.writeLock <- struct{}{}:
+		timing.WriteLockWait = time.Since(lockWaitStartedAt)
+	case <-ctx.Done():
+		timing.WriteLockWait = time.Since(lockWaitStartedAt)
+		return timing, fmt.Errorf("send websocket message: %w", ctx.Err())
+	case <-c.closed:
+		timing.WriteLockWait = time.Since(lockWaitStartedAt)
+		return timing, fmt.Errorf("send websocket message: %w", net.ErrClosed)
+	}
+	defer func() { <-c.writeLock }()
 
 	frameEncodeStartedAt := time.Now()
 	frame, err := NewFrame(msg)
@@ -207,17 +227,39 @@ func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
 	}
 	timing.FrameEncode = time.Since(frameEncodeStartedAt)
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.writeTimeout)
+	writeCtx, cancel := context.WithTimeout(ctx, c.writeTimeout)
 	defer cancel()
 
 	websocketWriteStartedAt := time.Now()
-	if err := c.conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
+	if err := c.conn.Write(writeCtx, websocket.MessageBinary, payload); err != nil {
 		timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
 		return timing, fmt.Errorf("send websocket message: %w", err)
 	}
 	timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
 	c.touchActivity()
 	return timing, nil
+}
+
+func (c *WebSocketConnection) Send(msg Message) error {
+	_, err := c.sendContextWithTiming(context.Background(), msg)
+	return err
+}
+
+func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
+	return c.sendContextWithTiming(context.Background(), msg)
+}
+
+// SendContext sends a message like Send, but respects the caller's context
+// across both the internal write-lock wait and the underlying WebSocket write.
+// If ctx is cancelled, SendContext returns promptly with a wrapped ctx.Err
+// even if another goroutine currently holds the write lock.
+//
+// SendContext shares the write lock with Send and SendWithTiming, so mixing
+// ctx-aware and non-ctx-aware callers on the same connection is safe -
+// non-ctx-aware callers simply cannot abort their own wait.
+func (c *WebSocketConnection) SendContext(ctx context.Context, msg Message) error {
+	_, err := c.sendContextWithTiming(ctx, msg)
+	return err
 }
 
 func (c *WebSocketConnection) Receive() (Message, error) {
@@ -248,6 +290,7 @@ func (c *WebSocketConnection) ReceiveContext(parent context.Context) (Message, e
 }
 
 func (c *WebSocketConnection) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
 	return c.conn.Close(websocket.StatusNormalClosure, "")
 }
 

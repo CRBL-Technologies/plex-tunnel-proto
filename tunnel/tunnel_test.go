@@ -2,10 +2,12 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -248,6 +250,167 @@ func TestWebSocketConnection_SendWithTiming(t *testing.T) {
 	}
 	if received.ID != msg.ID {
 		t.Fatalf("id: got %q, want %q", received.ID, msg.ID)
+	}
+}
+
+func TestWebSocketConnection_SendContext_HappyPath(t *testing.T) {
+	client, srv := setupWSPair(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	msg := Message{
+		Type: MsgHTTPResponse,
+		ID:   "ctx-happy",
+		Body: []byte("hello from context"),
+	}
+
+	if err := client.SendContext(ctx, msg); err != nil {
+		t.Fatalf("client send context: %v", err)
+	}
+
+	received, err := srv.Receive()
+	if err != nil {
+		t.Fatalf("server receive: %v", err)
+	}
+
+	if received.Type != msg.Type {
+		t.Fatalf("type: got %d, want %d", received.Type, msg.Type)
+	}
+	if received.ID != msg.ID {
+		t.Fatalf("id: got %q, want %q", received.ID, msg.ID)
+	}
+	if string(received.Body) != string(msg.Body) {
+		t.Fatalf("body: got %q, want %q", received.Body, msg.Body)
+	}
+}
+
+func TestWebSocketConnection_SendContext_CtxCancelledDuringLockWait(t *testing.T) {
+	client, _ := setupWSPair(t)
+
+	client.writeLock <- struct{}{}
+	defer func() { <-client.writeLock }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	startedAt := time.Now()
+	err := client.SendContext(ctx, Message{Type: MsgPing})
+	elapsed := time.Since(startedAt)
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("expected cancellation before 1s, got %v", elapsed)
+	}
+}
+
+func TestWebSocketConnection_SendContext_CloseUnblocksWaiters(t *testing.T) {
+	client, _ := setupWSPair(t)
+
+	client.writeLock <- struct{}{}
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = client.Close()
+	}()
+
+	startedAt := time.Now()
+	err := client.SendContext(context.Background(), Message{Type: MsgPing})
+	elapsed := time.Since(startedAt)
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("expected net.ErrClosed, got %v", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("expected close to unblock before 1s, got %v", elapsed)
+	}
+}
+
+func TestWebSocketConnection_SendContext_ConcurrentMixedCallers(t *testing.T) {
+	client, srv := setupWSPair(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			if err := client.Send(Message{
+				Type:   MsgHTTPRequest,
+				ID:     "req-a",
+				Method: http.MethodGet,
+				Path:   "/a",
+			}); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			if err := client.SendContext(ctx, Message{
+				Type:   MsgHTTPRequest,
+				ID:     "req-b",
+				Method: http.MethodGet,
+				Path:   "/b",
+			}); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
+	receiveCtx, cancelReceive := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelReceive()
+
+	var countA, countB int
+	for i := 0; i < 20; i++ {
+		msg, err := srv.ReceiveContext(receiveCtx)
+		if err != nil {
+			t.Fatalf("receive %d: %v", i, err)
+		}
+		switch msg.ID {
+		case "req-a":
+			countA++
+		case "req-b":
+			countB++
+		default:
+			t.Fatalf("unexpected message id %q", msg.ID)
+		}
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("send error: %v", err)
+		}
+	}
+
+	if countA != 10 {
+		t.Fatalf("req-a count: got %d, want 10", countA)
+	}
+	if countB != 10 {
+		t.Fatalf("req-b count: got %d, want 10", countB)
 	}
 }
 
