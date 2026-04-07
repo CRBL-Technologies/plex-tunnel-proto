@@ -6,6 +6,7 @@ import (
 	"net/http"
 )
 
+// MessageType identifies the kind of tunnel protocol message.
 type MessageType uint8
 
 const (
@@ -24,8 +25,12 @@ const (
 	MsgCancel               // server tells client to abort an in-flight request (e.g. downstream disconnect)
 )
 
+// ProtocolVersion is the current protocol version. Peers must negotiate
+// this version (or higher) during the Register/RegisterAck handshake.
 const ProtocolVersion uint16 = 2
 
+// Message is the application-level tunnel protocol unit. It is serialized
+// into a Frame for transport over WebSocket.
 type Message struct {
 	Type      MessageType `json:"type"`
 	ID        string      `json:"id,omitempty"`
@@ -51,6 +56,7 @@ type Message struct {
 	Encrypted bool   `json:"encrypted,omitempty"` // reserved for future end-to-end payload encryption
 }
 
+// Validate checks that the message has all required fields for its type.
 func (m Message) Validate() error {
 	switch m.Type {
 	case MsgRegister:
@@ -60,7 +66,10 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register message missing protocol_version")
 		}
-		if m.ProtocolVersion == ProtocolVersion && m.SessionID == "" && m.MaxConnections < 1 {
+		if m.ProtocolVersion < ProtocolVersion {
+			return fmt.Errorf("unsupported protocol version %d (minimum %d)", m.ProtocolVersion, ProtocolVersion)
+		}
+		if m.SessionID == "" && m.MaxConnections < 1 {
 			return errors.New("register message missing or invalid max_connections")
 		}
 	case MsgRegisterAck:
@@ -70,13 +79,14 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion == 0 {
 			return errors.New("register ack missing protocol_version")
 		}
-		if m.ProtocolVersion == ProtocolVersion {
-			if m.SessionID == "" {
-				return errors.New("register ack missing session_id")
-			}
-			if m.MaxConnections < 1 {
-				return errors.New("register ack missing or invalid max_connections")
-			}
+		if m.ProtocolVersion < ProtocolVersion {
+			return fmt.Errorf("unsupported protocol version %d (minimum %d)", m.ProtocolVersion, ProtocolVersion)
+		}
+		if m.SessionID == "" {
+			return errors.New("register ack missing session_id")
+		}
+		if m.MaxConnections < 1 {
+			return errors.New("register ack missing or invalid max_connections")
 		}
 	case MsgHTTPRequest:
 		if m.ID == "" {
@@ -134,6 +144,7 @@ func (m Message) Validate() error {
 	return nil
 }
 
+// CloneHeaders returns a deep copy of the given HTTP headers as a plain map.
 func CloneHeaders(headers http.Header) map[string][]string {
 	if len(headers) == 0 {
 		return nil

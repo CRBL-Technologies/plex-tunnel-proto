@@ -8,14 +8,19 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nhooyr.io/websocket"
 )
 
 const (
-	defaultReadTimeout  = 70 * time.Second
-	defaultWriteTimeout = 60 * time.Second
+	// defaultReadTimeout bounds the time for a single WebSocket message read.
+	// This covers the full message including body, so it must accommodate
+	// large payloads (~8 MB) on moderate connections. The server's per-request
+	// timeout provides an outer bound; this timeout catches stuck reads.
+	defaultReadTimeout  = 30 * time.Second
+	defaultWriteTimeout = 30 * time.Second
 	defaultReadLimit    = int64(8 * 1024 * 1024)
 )
 
@@ -43,13 +48,19 @@ func (t *WebSocketTransport) Listen(addr string) (Listener, error) {
 
 	l := &websocketListener{
 		ln:    ln,
-		conns: make(chan Connection, 64),
-		errCh: make(chan error, 1),
+		conns: make(chan Connection, 256),
+		errCh: make(chan error, 2),
 		done:  make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}()
+
 		conn, err := acceptWebSocket(w, r, t.readTimeout(), t.writeTimeout())
 		if err != nil {
 			return
@@ -81,9 +92,16 @@ func DialWebSocket(ctx context.Context, rawURL string, headers http.Header) (*We
 	return dialWebSocket(ctx, rawURL, headers, defaultReadTimeout, defaultWriteTimeout)
 }
 
+// AcceptWebSocket upgrades the HTTP request to a WebSocket connection.
+// Origin validation is intentionally disabled (InsecureSkipVerify) because
+// this is a tunnel transport: the server accepts connections from tunnel
+// clients whose origin is not a browser page. Callers that need CSRF
+// protection should validate the Origin header before calling this function.
 func AcceptWebSocket(w http.ResponseWriter, r *http.Request) (*WebSocketConnection, error) {
 	return acceptWebSocket(w, r, defaultReadTimeout, defaultWriteTimeout)
 }
+
+const defaultHandshakeTimeout = 15 * time.Second
 
 func dialWebSocket(
 	ctx context.Context,
@@ -92,6 +110,12 @@ func dialWebSocket(
 	readTimeout time.Duration,
 	writeTimeout time.Duration,
 ) (*WebSocketConnection, error) {
+	// Ensure a deadline exists so the handshake can't hang indefinitely.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultHandshakeTimeout)
+		defer cancel()
+	}
 	dialOpts := &websocket.DialOptions{HTTPHeader: headers}
 	wsConn, resp, err := websocket.Dial(ctx, rawURL, dialOpts)
 	if err != nil {
@@ -128,7 +152,16 @@ type WebSocketConnection struct {
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 	Encrypted    bool // reserved for future end-to-end encryption negotiation
-	writeMu      sync.Mutex
+	// writeLock is a 1-buffered channel acting as a ctx-aware binary semaphore.
+	// Acquisition selects on ctx.Done and closed, so waiters can abort on
+	// context cancellation or connection teardown instead of blocking on an
+	// uninterruptible Mutex.Lock.
+	writeLock chan struct{}
+	// closed is closed exactly once by Close so in-flight and queued
+	// SendContext callers unblock instead of waiting up to writeTimeout.
+	closed       chan struct{}
+	closeOnce    sync.Once
+	lastActivity atomic.Int64 // unix nano timestamp of last send or receive
 }
 
 type SendTiming struct {
@@ -146,26 +179,40 @@ func newWebSocketConnection(conn *websocket.Conn, remoteAddr string, readTimeout
 	// for proxied HTTP chunks and causes read-limited disconnects.
 	conn.SetReadLimit(defaultReadLimit)
 
-	return &WebSocketConnection{
+	c := &WebSocketConnection{
 		conn:         conn,
 		remoteAddr:   remoteAddr,
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
+		writeLock:    make(chan struct{}, 1),
+		closed:       make(chan struct{}),
 	}
+	c.touchActivity()
+	return c
 }
 
-func (c *WebSocketConnection) Send(msg Message) error {
-	_, err := c.SendWithTiming(msg)
-	return err
-}
-
-func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
+// sendContextWithTiming is the internal workhorse for all send paths.
+// ctx governs both lock acquisition and the underlying WebSocket write.
+// A nil ctx is treated as context.Background() - but public callers should
+// always pass a concrete context.
+func (c *WebSocketConnection) sendContextWithTiming(ctx context.Context, msg Message) (SendTiming, error) {
 	var timing SendTiming
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	lockWaitStartedAt := time.Now()
-	c.writeMu.Lock()
-	timing.WriteLockWait = time.Since(lockWaitStartedAt)
-	defer c.writeMu.Unlock()
+	select {
+	case c.writeLock <- struct{}{}:
+		timing.WriteLockWait = time.Since(lockWaitStartedAt)
+	case <-ctx.Done():
+		timing.WriteLockWait = time.Since(lockWaitStartedAt)
+		return timing, fmt.Errorf("send websocket message: %w", ctx.Err())
+	case <-c.closed:
+		timing.WriteLockWait = time.Since(lockWaitStartedAt)
+		return timing, fmt.Errorf("send websocket message: %w", net.ErrClosed)
+	}
+	defer func() { <-c.writeLock }()
 
 	frameEncodeStartedAt := time.Now()
 	frame, err := NewFrame(msg)
@@ -180,23 +227,50 @@ func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
 	}
 	timing.FrameEncode = time.Since(frameEncodeStartedAt)
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.writeTimeout)
+	writeCtx, cancel := context.WithTimeout(ctx, c.writeTimeout)
 	defer cancel()
 
 	websocketWriteStartedAt := time.Now()
-	if err := c.conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
+	if err := c.conn.Write(writeCtx, websocket.MessageBinary, payload); err != nil {
 		timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
 		return timing, fmt.Errorf("send websocket message: %w", err)
 	}
 	timing.WebSocketWrite = time.Since(websocketWriteStartedAt)
+	c.touchActivity()
 	return timing, nil
 }
 
+func (c *WebSocketConnection) Send(msg Message) error {
+	_, err := c.sendContextWithTiming(context.Background(), msg)
+	return err
+}
+
+func (c *WebSocketConnection) SendWithTiming(msg Message) (SendTiming, error) {
+	return c.sendContextWithTiming(context.Background(), msg)
+}
+
+// SendContext sends a message like Send, but respects the caller's context
+// across both the internal write-lock wait and the underlying WebSocket write.
+// If ctx is cancelled, SendContext returns promptly with a wrapped ctx.Err
+// even if another goroutine currently holds the write lock.
+//
+// SendContext shares the write lock with Send and SendWithTiming, so mixing
+// ctx-aware and non-ctx-aware callers on the same connection is safe -
+// non-ctx-aware callers simply cannot abort their own wait.
+func (c *WebSocketConnection) SendContext(ctx context.Context, msg Message) error {
+	_, err := c.sendContextWithTiming(ctx, msg)
+	return err
+}
+
 func (c *WebSocketConnection) Receive() (Message, error) {
-	ctx := context.Background()
+	return c.ReceiveContext(context.Background())
+}
+
+func (c *WebSocketConnection) ReceiveContext(parent context.Context) (Message, error) {
+	ctx := parent
 	cancel := func() {}
 	if c.readTimeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), c.readTimeout)
+		ctx, cancel = context.WithTimeout(parent, c.readTimeout)
 	}
 	defer cancel()
 
@@ -211,15 +285,30 @@ func (c *WebSocketConnection) Receive() (Message, error) {
 	if err != nil {
 		return Message{}, fmt.Errorf("receive websocket message: %w", err)
 	}
+	c.touchActivity()
 	return msg, nil
 }
 
 func (c *WebSocketConnection) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
 	return c.conn.Close(websocket.StatusNormalClosure, "")
 }
 
 func (c *WebSocketConnection) RemoteAddr() string {
 	return c.remoteAddr
+}
+
+// IdleDuration returns how long the connection has been idle (no sends or receives).
+func (c *WebSocketConnection) IdleDuration() time.Duration {
+	last := c.lastActivity.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, last))
+}
+
+func (c *WebSocketConnection) touchActivity() {
+	c.lastActivity.Store(time.Now().UnixNano())
 }
 
 type websocketListener struct {
