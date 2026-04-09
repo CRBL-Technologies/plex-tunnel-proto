@@ -25,9 +25,19 @@ const (
 	MsgCancel               // server tells client to abort an in-flight request (e.g. downstream disconnect)
 )
 
+// Capability bits are advertised on MsgRegister/MsgRegisterAck and govern
+// optional protocol behaviour for the lifetime of the session.
+const (
+	// CapLeasedPool indicates the peer supports the leased-tunnel-pool
+	// data plane (1 control WS + N data WS, leased-exclusive data lanes).
+	// Both peers MUST advertise this bit for the server to enable
+	// leased-pool routing for the session.
+	CapLeasedPool uint32 = 1 << 0
+)
+
 // ProtocolVersion is the current protocol version. Peers must negotiate
 // this version (or higher) during the Register/RegisterAck handshake.
-const ProtocolVersion uint16 = 2
+const ProtocolVersion uint16 = 3
 
 // Message is the application-level tunnel protocol unit. It is serialized
 // into a Frame for transport over WebSocket.
@@ -41,12 +51,15 @@ type Message struct {
 	// SessionID identifies the logical tunnel session in protocol v2.
 	SessionID string `json:"session_id,omitempty"`
 	// MaxConnections is the requested/granted parallel connection count in protocol v2.
-	MaxConnections int                 `json:"max_connections,omitempty"`
-	Method         string              `json:"method,omitempty"`
-	Path           string              `json:"path,omitempty"`
-	Headers        map[string][]string `json:"headers,omitempty"`
-	Body           []byte              `json:"-"`
-	Status         int                 `json:"status,omitempty"`
+	MaxConnections int `json:"max_connections,omitempty"`
+	// Capabilities is a bitmask of optional protocol features negotiated during
+	// register/register-ack. Peers MUST treat unknown bits as reserved-zero.
+	Capabilities uint32              `json:"capabilities,omitempty"`
+	Method       string              `json:"method,omitempty"`
+	Path         string              `json:"path,omitempty"`
+	Headers      map[string][]string `json:"headers,omitempty"`
+	Body         []byte              `json:"-"`
+	Status       int                 `json:"status,omitempty"`
 	// EndStream marks the final frame for a request/response stream identified
 	// by ID. For streamed HTTP requests, method/path/headers are sent on the
 	// first frame only; continuation frames carry body chunks plus EndStream.

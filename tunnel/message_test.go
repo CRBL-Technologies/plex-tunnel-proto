@@ -1,6 +1,95 @@
 package tunnel
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestProtocolVersionIsThree(t *testing.T) {
+	if ProtocolVersion != 3 {
+		t.Fatalf("ProtocolVersion = %d, want 3", ProtocolVersion)
+	}
+}
+
+func TestCapLeasedPoolBitIsOne(t *testing.T) {
+	if CapLeasedPool != 1 {
+		t.Fatalf("CapLeasedPool = %d, want 1", CapLeasedPool)
+	}
+}
+
+func TestValidateRegisterAcceptsLeasedPoolCapability(t *testing.T) {
+	msg := Message{
+		Type:            MsgRegister,
+		Token:           "token-123",
+		ProtocolVersion: ProtocolVersion,
+		MaxConnections:  4,
+		Capabilities:    CapLeasedPool,
+	}
+
+	if err := msg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil", err)
+	}
+}
+
+func TestValidateRegisterIgnoresUnknownCapabilityBits(t *testing.T) {
+	msg := Message{
+		Type:            MsgRegister,
+		Token:           "token-123",
+		ProtocolVersion: ProtocolVersion,
+		MaxConnections:  4,
+		Capabilities:    0xFF00,
+	}
+
+	if err := msg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil", err)
+	}
+}
+
+func TestValidateRejectsOlderProtocolVersion(t *testing.T) {
+	msg := Message{
+		Type:            MsgRegister,
+		Token:           "token-123",
+		ProtocolVersion: 2,
+		MaxConnections:  4,
+	}
+
+	err := msg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "minimum 3") {
+		t.Fatalf("Validate() error = %q, want mention of minimum 3", err)
+	}
+}
+
+func TestRegisterFrameRoundTripPreservesCapabilities(t *testing.T) {
+	msg := Message{
+		Type:            MsgRegister,
+		Token:           "token-123",
+		ProtocolVersion: ProtocolVersion,
+		MaxConnections:  4,
+		Capabilities:    CapLeasedPool,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("NewFrame() error = %v", err)
+	}
+
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary() error = %v", err)
+	}
+
+	got, err := decodeMessagePayload(payload)
+	if err != nil {
+		t.Fatalf("decodeMessagePayload() error = %v", err)
+	}
+
+	if got.Capabilities != msg.Capabilities {
+		t.Fatalf("Capabilities = %d, want %d", got.Capabilities, msg.Capabilities)
+	}
+}
 
 func TestMsgMaxConnectionsUpdateValidate(t *testing.T) {
 	tests := []struct {
