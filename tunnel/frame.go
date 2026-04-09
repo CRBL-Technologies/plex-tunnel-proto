@@ -46,6 +46,7 @@ type frameMetadata struct {
 	ProtocolVersion uint16              `json:"protocol_version,omitempty"`
 	SessionID       string              `json:"session_id,omitempty"`
 	MaxConnections  int                 `json:"max_connections,omitempty"`
+	Capabilities    uint32              `json:"capabilities,omitempty"`
 	Method          string              `json:"method,omitempty"`
 	Path            string              `json:"path,omitempty"`
 	Headers         map[string][]string `json:"headers,omitempty"`
@@ -174,6 +175,7 @@ func encodeFrameMetadata(msg Message) ([]byte, error) {
 		ProtocolVersion: msg.ProtocolVersion,
 		SessionID:       msg.SessionID,
 		MaxConnections:  msg.MaxConnections,
+		Capabilities:    msg.Capabilities,
 		Method:          msg.Method,
 		Path:            msg.Path,
 		Headers:         msg.Headers,
@@ -217,6 +219,7 @@ func decodeFrameMetadata(header []byte) (Message, error) {
 		ProtocolVersion: meta.ProtocolVersion,
 		SessionID:       meta.SessionID,
 		MaxConnections:  meta.MaxConnections,
+		Capabilities:    meta.Capabilities,
 		Method:          meta.Method,
 		Path:            meta.Path,
 		Headers:         meta.Headers,
