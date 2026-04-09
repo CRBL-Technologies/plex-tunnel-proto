@@ -19,7 +19,14 @@ const (
 	// This covers the full message including body, so it must accommodate
 	// large payloads (~8 MB) on moderate connections. The server's per-request
 	// timeout provides an outer bound; this timeout catches stuck reads.
-	defaultReadTimeout  = 30 * time.Second
+	defaultReadTimeout = 30 * time.Second
+	// TunnelReadTimeout is the per-Receive read deadline for long-lived tunnel
+	// WebSocket connections. It is zero - no deadline is applied to individual
+	// reads - because tunnel liveness is managed by application-layer ping/pong
+	// (see plex-tunnel-server and plex-tunnel client keepalive loops). Short-lived
+	// callers (e.g. the WS-proxy pass-through path) should continue to use
+	// defaultReadTimeout via DialWebSocket / AcceptWebSocket.
+	TunnelReadTimeout   = 0 * time.Second
 	defaultWriteTimeout = 30 * time.Second
 	defaultReadLimit    = int64(8 * 1024 * 1024)
 )
@@ -92,6 +99,14 @@ func DialWebSocket(ctx context.Context, rawURL string, headers http.Header) (*We
 	return dialWebSocket(ctx, rawURL, headers, defaultReadTimeout, defaultWriteTimeout)
 }
 
+// DialTunnelWebSocket is like DialWebSocket but configures the connection for
+// long-lived tunnel use: no per-Receive read deadline. Liveness detection is
+// the caller's responsibility via application-layer ping/pong. Used by the
+// plex-tunnel client to open control and data tunnels.
+func DialTunnelWebSocket(ctx context.Context, rawURL string, headers http.Header) (*WebSocketConnection, error) {
+	return dialWebSocket(ctx, rawURL, headers, TunnelReadTimeout, defaultWriteTimeout)
+}
+
 // AcceptWebSocket upgrades the HTTP request to a WebSocket connection.
 // Origin validation is intentionally disabled (InsecureSkipVerify) because
 // this is a tunnel transport: the server accepts connections from tunnel
@@ -99,6 +114,14 @@ func DialWebSocket(ctx context.Context, rawURL string, headers http.Header) (*We
 // protection should validate the Origin header before calling this function.
 func AcceptWebSocket(w http.ResponseWriter, r *http.Request) (*WebSocketConnection, error) {
 	return acceptWebSocket(w, r, defaultReadTimeout, defaultWriteTimeout)
+}
+
+// AcceptTunnelWebSocket is like AcceptWebSocket but configures the connection
+// for long-lived tunnel use: no per-Receive read deadline. Liveness detection
+// is the caller's responsibility via application-layer ping/pong. Used by the
+// plex-tunnel-server tunnel-mux handler to accept client tunnel connections.
+func AcceptTunnelWebSocket(w http.ResponseWriter, r *http.Request) (*WebSocketConnection, error) {
+	return acceptWebSocket(w, r, TunnelReadTimeout, defaultWriteTimeout)
 }
 
 const defaultHandshakeTimeout = 15 * time.Second
@@ -276,6 +299,9 @@ func (c *WebSocketConnection) ReceiveContext(parent context.Context) (Message, e
 
 	msgType, payload, err := c.conn.Read(ctx)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return Message{}, fmt.Errorf("receive websocket message: %w", ctxErr)
+		}
 		return Message{}, fmt.Errorf("receive websocket message: %w", err)
 	}
 	if msgType != websocket.MessageBinary {
