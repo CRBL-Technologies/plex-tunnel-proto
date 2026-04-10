@@ -144,6 +144,120 @@ func setupWSPair(t *testing.T) (client *WebSocketConnection, srv *WebSocketConne
 	}
 }
 
+func setupWSPairWithWebSocketEndpoints(
+	t *testing.T,
+	accept func(http.ResponseWriter, *http.Request) (*WebSocketConnection, error),
+	dial func(context.Context, string, http.Header) (*WebSocketConnection, error),
+) (client *WebSocketConnection, srv *WebSocketConnection) {
+	t.Helper()
+	serverReady := make(chan *WebSocketConnection, 1)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := accept(w, r)
+		if err != nil {
+			t.Logf("accept error: %v", err)
+			return
+		}
+		serverReady <- conn
+	}))
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	clientConn, err := dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = clientConn.conn.CloseNow() })
+
+	select {
+	case srvConn := <-serverReady:
+		t.Cleanup(func() { _ = srvConn.conn.CloseNow() })
+		return clientConn, srvConn
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for server-side connection")
+		return nil, nil
+	}
+}
+
+func TestTunnelReadTimeout_Constant(t *testing.T) {
+	if TunnelReadTimeout != 0 {
+		t.Fatalf("TunnelReadTimeout: got %v, want 0", TunnelReadTimeout)
+	}
+}
+
+func TestDialTunnelWebSocket_NoReadDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long-lived tunnel read deadline test in short mode")
+	}
+
+	client, srv := setupWSPairWithWebSocketEndpoints(t, AcceptTunnelWebSocket, DialTunnelWebSocket)
+
+	type receiveResult struct {
+		msg Message
+		err error
+	}
+
+	resultCh := make(chan receiveResult, 1)
+	go func() {
+		msg, err := srv.Receive()
+		resultCh <- receiveResult{msg: msg, err: err}
+	}()
+
+	time.Sleep(defaultReadTimeout + defaultReadTimeout/2)
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("Receive returned before a message was sent: msg=%+v err=%v", result.msg, result.err)
+	default:
+	}
+
+	want := Message{Type: MsgPing}
+	if err := client.Send(want); err != nil {
+		t.Fatalf("client send: %v", err)
+	}
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("server receive: %v", result.err)
+		}
+		if result.msg.Type != want.Type {
+			t.Fatalf("message type: got %d, want %d", result.msg.Type, want.Type)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Receive did not return after message was sent")
+	}
+}
+
+func TestDialWebSocket_StillHasReadDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping read deadline regression test in short mode")
+	}
+
+	_, srv := setupWSPair(t)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := srv.Receive()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected receive to fail with a read deadline")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+		}
+	case <-time.After(defaultReadTimeout + 5*time.Second):
+		t.Fatalf("Receive did not time out within %v", defaultReadTimeout+5*time.Second)
+	}
+}
+
 func TestWebSocketConnection_SendReceive(t *testing.T) {
 	client, srv := setupWSPair(t)
 
