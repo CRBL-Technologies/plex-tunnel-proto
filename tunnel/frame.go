@@ -24,8 +24,8 @@ const frameHeaderSize = 9
 // Total frame size = 9 + N + M bytes.
 //
 // The message type byte doubles as an implicit version indicator: valid
-// types are in [1, 13] for protocol v2. A receiver that encounters a type
-// outside this range should treat the frame as incompatible.
+// types are in [1, 14] for protocol v3 with CapWSFlowControl. A receiver that
+// encounters a type outside this range should treat the frame as incompatible.
 //
 // There is no explicit per-frame version field. Forward compatibility is
 // handled at the protocol level via the ProtocolVersion negotiated during
@@ -54,6 +54,7 @@ type frameMetadata struct {
 	EndStream       bool                `json:"end_stream,omitempty"`
 	Error           string              `json:"error,omitempty"`
 	WSBinary        bool                `json:"ws_binary,omitempty"`
+	WindowIncrement uint32              `json:"window_increment,omitempty"`
 	Encrypted       bool                `json:"encrypted,omitempty"`
 }
 
@@ -183,6 +184,7 @@ func encodeFrameMetadata(msg Message) ([]byte, error) {
 		EndStream:       msg.EndStream,
 		Error:           msg.Error,
 		WSBinary:        msg.WSBinary,
+		WindowIncrement: msg.WindowIncrement,
 		Encrypted:       msg.Encrypted,
 	}
 
@@ -227,6 +229,7 @@ func decodeFrameMetadata(header []byte) (Message, error) {
 		EndStream:       meta.EndStream,
 		Error:           meta.Error,
 		WSBinary:        meta.WSBinary,
+		WindowIncrement: meta.WindowIncrement,
 		Encrypted:       meta.Encrypted,
 	}, nil
 }
