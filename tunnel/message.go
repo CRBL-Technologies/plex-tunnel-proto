@@ -23,6 +23,7 @@ const (
 	MsgKeyExchange          // reserved for future end-to-end encryption key exchange
 	MsgMaxConnectionsUpdate // server tells client to adjust its connection pool size
 	MsgCancel               // server tells client to abort an in-flight request (e.g. downstream disconnect)
+	MsgWSWindowUpdate
 )
 
 // Capability bits are advertised on MsgRegister/MsgRegisterAck and govern
@@ -32,7 +33,8 @@ const (
 	// data plane (1 control WS + N data WS, leased-exclusive data lanes).
 	// Both peers MUST advertise this bit for the server to enable
 	// leased-pool routing for the session.
-	CapLeasedPool uint32 = 1 << 0
+	CapLeasedPool    uint32 = 1 << 0
+	CapWSFlowControl uint32 = 1 << 1
 )
 
 // ProtocolVersion is the current protocol version. Peers must negotiate
@@ -63,10 +65,11 @@ type Message struct {
 	// EndStream marks the final frame for a request/response stream identified
 	// by ID. For streamed HTTP requests, method/path/headers are sent on the
 	// first frame only; continuation frames carry body chunks plus EndStream.
-	EndStream bool   `json:"end_stream,omitempty"`
-	Error     string `json:"error,omitempty"`
-	WSBinary  bool   `json:"ws_binary,omitempty"` // true = binary WebSocket frame
-	Encrypted bool   `json:"encrypted,omitempty"` // reserved for future end-to-end payload encryption
+	EndStream       bool   `json:"end_stream,omitempty"`
+	Error           string `json:"error,omitempty"`
+	WSBinary        bool   `json:"ws_binary,omitempty"` // true = binary WebSocket frame
+	WindowIncrement uint32 `json:"window_increment,omitempty"`
+	Encrypted       bool   `json:"encrypted,omitempty"` // reserved for future end-to-end payload encryption
 }
 
 // Validate checks that the message has all required fields for its type.
@@ -149,6 +152,10 @@ func (m Message) Validate() error {
 	case MsgCancel:
 		if m.ID == "" {
 			return errors.New("cancel message missing id")
+		}
+	case MsgWSWindowUpdate:
+		if m.ID == "" {
+			return errors.New("ws window update message missing id")
 		}
 	default:
 		return fmt.Errorf("unknown message type: %d", m.Type)

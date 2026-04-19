@@ -11,9 +11,15 @@ func TestProtocolVersionIsThree(t *testing.T) {
 	}
 }
 
-func TestCapLeasedPoolBitIsOne(t *testing.T) {
+func TestCapabilityBits(t *testing.T) {
 	if CapLeasedPool != 1 {
 		t.Fatalf("CapLeasedPool = %d, want 1", CapLeasedPool)
+	}
+	if CapWSFlowControl != 2 {
+		t.Fatalf("CapWSFlowControl = %d, want 2", CapWSFlowControl)
+	}
+	if CapLeasedPool&CapWSFlowControl != 0 {
+		t.Fatalf("capability bits overlap: CapLeasedPool=%d CapWSFlowControl=%d", CapLeasedPool, CapWSFlowControl)
 	}
 }
 
@@ -167,6 +173,79 @@ func TestMsgCancelValidate(t *testing.T) {
 				t.Fatalf("expected nil error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestMsgWSWindowUpdateValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		msg     Message
+		wantErr bool
+	}{
+		{
+			name: "valid with zero increment",
+			msg: Message{
+				Type:            MsgWSWindowUpdate,
+				ID:              "stream-123",
+				WindowIncrement: 0,
+			},
+		},
+		{
+			name: "valid with non-zero increment",
+			msg: Message{
+				Type:            MsgWSWindowUpdate,
+				ID:              "stream-123",
+				WindowIncrement: 32768,
+			},
+		},
+		{
+			name: "missing id invalid",
+			msg: Message{
+				Type:            MsgWSWindowUpdate,
+				WindowIncrement: 32768,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.msg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestMsgWSWindowUpdateFrameRoundTrip(t *testing.T) {
+	msg := Message{
+		Type:            MsgWSWindowUpdate,
+		ID:              "test-stream-id",
+		WindowIncrement: 32768,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("NewFrame() error = %v", err)
+	}
+
+	got, err := frame.Message()
+	if err != nil {
+		t.Fatalf("Frame.Message() error = %v", err)
+	}
+
+	if got.Type != msg.Type {
+		t.Fatalf("Type = %d, want %d", got.Type, msg.Type)
+	}
+	if got.ID != msg.ID {
+		t.Fatalf("ID = %q, want %q", got.ID, msg.ID)
+	}
+	if got.WindowIncrement != msg.WindowIncrement {
+		t.Fatalf("WindowIncrement = %d, want %d", got.WindowIncrement, msg.WindowIncrement)
 	}
 }
 
