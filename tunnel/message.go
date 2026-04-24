@@ -24,6 +24,9 @@ const (
 	MsgMaxConnectionsUpdate // server tells client to adjust its connection pool size
 	MsgCancel               // server tells client to abort an in-flight request (e.g. downstream disconnect)
 	MsgWSWindowUpdate
+	MsgHTTPWindowUpdate // HTTP flow-control credit grant (parallel to MsgWSWindowUpdate)
+	MsgCancelAck        // acknowledges a prior MsgCancel (either direction)
+	MsgFrameDelivered   // receiver-emitted delivery confirmation; carries AckedSeq + optional StreamTerminal
 )
 
 // Capability bits are advertised on MsgRegister/MsgRegisterAck and govern
@@ -35,11 +38,16 @@ const (
 	// leased-pool routing for the session.
 	CapLeasedPool    uint32 = 1 << 0
 	CapWSFlowControl uint32 = 1 << 1
+	// CapUnifiedPool indicates the peer supports the unified-pool data plane
+	// (per-frame placement across untyped tunnels, reassembly by Seq, delivery
+	// acks via MsgFrameDelivered). Both peers MUST advertise for the session
+	// to use unified-pool semantics.
+	CapUnifiedPool uint32 = 1 << 2
 )
 
 // ProtocolVersion is the current protocol version. Peers must negotiate
-// this version (or higher) during the Register/RegisterAck handshake.
-const ProtocolVersion uint16 = 3
+// this version during the Register/RegisterAck handshake.
+const ProtocolVersion uint16 = 4
 
 // Message is the application-level tunnel protocol unit. It is serialized
 // into a Frame for transport over WebSocket.
@@ -69,6 +77,10 @@ type Message struct {
 	Error           string `json:"error,omitempty"`
 	WSBinary        bool   `json:"ws_binary,omitempty"` // true = binary WebSocket frame
 	WindowIncrement uint32 `json:"window_increment,omitempty"`
+	Seq             uint64 `json:"seq,omitempty"`
+	TunnelUID       string `json:"tunnel_uid,omitempty"`
+	AckedSeq        uint64 `json:"acked_seq,omitempty"`
+	StreamTerminal  bool   `json:"stream_terminal,omitempty"`
 	Encrypted       bool   `json:"encrypted,omitempty"` // reserved for future end-to-end payload encryption
 }
 
@@ -153,6 +165,21 @@ func (m Message) Validate() error {
 	case MsgWSWindowUpdate:
 		if m.ID == "" {
 			return errors.New("ws window update message missing id")
+		}
+	case MsgHTTPWindowUpdate:
+		if m.ID == "" {
+			return errors.New("http window update message missing id")
+		}
+		if m.WindowIncrement == 0 {
+			return errors.New("http window update message missing or invalid window_increment")
+		}
+	case MsgCancelAck:
+		if m.ID == "" {
+			return errors.New("cancel ack message missing id")
+		}
+	case MsgFrameDelivered:
+		if m.ID == "" {
+			return errors.New("frame delivered message missing id")
 		}
 	default:
 		return fmt.Errorf("unknown message type: %d", m.Type)

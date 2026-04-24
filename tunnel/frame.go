@@ -24,7 +24,7 @@ const frameHeaderSize = 9
 // Total frame size = 9 + N + M bytes.
 //
 // The message type byte doubles as an implicit version indicator: valid
-// types are in [1, 14] for protocol v3 with CapWSFlowControl. A receiver that
+// types are in [1, 17] for protocol v4 with CapUnifiedPool. A receiver that
 // encounters a type outside this range should treat the frame as incompatible.
 //
 // There is no explicit per-frame version field. Forward compatibility is
@@ -55,6 +55,10 @@ type frameMetadata struct {
 	Error           string              `json:"error,omitempty"`
 	WSBinary        bool                `json:"ws_binary,omitempty"`
 	WindowIncrement uint32              `json:"window_increment,omitempty"`
+	Seq             uint64              `json:"seq,omitempty"`
+	TunnelUID       string              `json:"tunnel_uid,omitempty"`
+	AckedSeq        uint64              `json:"acked_seq,omitempty"`
+	StreamTerminal  bool                `json:"stream_terminal,omitempty"`
 	Encrypted       bool                `json:"encrypted,omitempty"`
 }
 
@@ -185,6 +189,10 @@ func encodeFrameMetadata(msg Message) ([]byte, error) {
 		Error:           msg.Error,
 		WSBinary:        msg.WSBinary,
 		WindowIncrement: msg.WindowIncrement,
+		Seq:             msg.Seq,
+		TunnelUID:       msg.TunnelUID,
+		AckedSeq:        msg.AckedSeq,
+		StreamTerminal:  msg.StreamTerminal,
 		Encrypted:       msg.Encrypted,
 	}
 
@@ -230,6 +238,10 @@ func decodeFrameMetadata(header []byte) (Message, error) {
 		Error:           meta.Error,
 		WSBinary:        meta.WSBinary,
 		WindowIncrement: meta.WindowIncrement,
+		Seq:             meta.Seq,
+		TunnelUID:       meta.TunnelUID,
+		AckedSeq:        meta.AckedSeq,
+		StreamTerminal:  meta.StreamTerminal,
 		Encrypted:       meta.Encrypted,
 	}, nil
 }
