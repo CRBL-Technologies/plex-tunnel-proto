@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestProtocolVersionIsThree(t *testing.T) {
-	if ProtocolVersion != 3 {
-		t.Fatalf("ProtocolVersion = %d, want 3", ProtocolVersion)
+func TestProtocolVersionIsFour(t *testing.T) {
+	if ProtocolVersion != 4 {
+		t.Fatalf("ProtocolVersion = %d, want 4", ProtocolVersion)
 	}
 }
 
@@ -63,8 +63,8 @@ func TestValidateRejectsOlderProtocolVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("Validate() error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "minimum 3") {
-		t.Fatalf("Validate() error = %q, want mention of minimum 3", err)
+	if !strings.Contains(err.Error(), "minimum 4") {
+		t.Fatalf("Validate() error = %q, want mention of minimum 4", err)
 	}
 }
 

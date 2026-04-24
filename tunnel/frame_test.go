@@ -116,6 +116,187 @@ func TestFrameRegisterAckRoundTripWithSessionFields(t *testing.T) {
 	}
 }
 
+func TestFrameV4FieldsRoundTrip(t *testing.T) {
+	msg := Message{
+		Type:           MsgHTTPResponse,
+		ID:             "stream-1",
+		Status:         200,
+		Seq:            7,
+		TunnelUID:      "tunnel-abc",
+		AckedSeq:       5,
+		StreamTerminal: true,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	decodedFrame, err := UnmarshalFrame(payload)
+	if err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
+	}
+
+	got, err := decodedFrame.Message()
+	if err != nil {
+		t.Fatalf("frame message: %v", err)
+	}
+
+	if got.Seq != msg.Seq {
+		t.Fatalf("seq = %d, want %d", got.Seq, msg.Seq)
+	}
+	if got.TunnelUID != msg.TunnelUID {
+		t.Fatalf("tunnel_uid = %q, want %q", got.TunnelUID, msg.TunnelUID)
+	}
+	if got.AckedSeq != msg.AckedSeq {
+		t.Fatalf("acked_seq = %d, want %d", got.AckedSeq, msg.AckedSeq)
+	}
+	if got.StreamTerminal != msg.StreamTerminal {
+		t.Fatalf("stream_terminal = %t, want %t", got.StreamTerminal, msg.StreamTerminal)
+	}
+}
+
+func TestFrameMsgFrameDeliveredRoundTrip(t *testing.T) {
+	msg := Message{
+		Type:           MsgFrameDelivered,
+		ID:             "stream-1",
+		AckedSeq:       42,
+		StreamTerminal: true,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	decodedFrame, err := UnmarshalFrame(payload)
+	if err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
+	}
+
+	got, err := decodedFrame.Message()
+	if err != nil {
+		t.Fatalf("frame message: %v", err)
+	}
+
+	if got.Type != msg.Type {
+		t.Fatalf("type = %d, want %d", got.Type, msg.Type)
+	}
+	if got.ID != msg.ID {
+		t.Fatalf("id = %q, want %q", got.ID, msg.ID)
+	}
+	if got.AckedSeq != msg.AckedSeq {
+		t.Fatalf("acked_seq = %d, want %d", got.AckedSeq, msg.AckedSeq)
+	}
+	if got.StreamTerminal != msg.StreamTerminal {
+		t.Fatalf("stream_terminal = %t, want %t", got.StreamTerminal, msg.StreamTerminal)
+	}
+}
+
+func TestFrameMsgHTTPWindowUpdateRoundTrip(t *testing.T) {
+	msg := Message{
+		Type:            MsgHTTPWindowUpdate,
+		ID:              "stream-1",
+		WindowIncrement: 1 << 20,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	decodedFrame, err := UnmarshalFrame(payload)
+	if err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
+	}
+
+	got, err := decodedFrame.Message()
+	if err != nil {
+		t.Fatalf("frame message: %v", err)
+	}
+
+	if got.Type != msg.Type {
+		t.Fatalf("type = %d, want %d", got.Type, msg.Type)
+	}
+	if got.ID != msg.ID {
+		t.Fatalf("id = %q, want %q", got.ID, msg.ID)
+	}
+	if got.WindowIncrement != msg.WindowIncrement {
+		t.Fatalf("window_increment = %d, want %d", got.WindowIncrement, msg.WindowIncrement)
+	}
+}
+
+func TestFrameMsgCancelAckRoundTrip(t *testing.T) {
+	msg := Message{
+		Type: MsgCancelAck,
+		ID:   "stream-1",
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+
+	payload, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	decodedFrame, err := UnmarshalFrame(payload)
+	if err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
+	}
+
+	got, err := decodedFrame.Message()
+	if err != nil {
+		t.Fatalf("frame message: %v", err)
+	}
+
+	if got.Type != msg.Type {
+		t.Fatalf("type = %d, want %d", got.Type, msg.Type)
+	}
+	if got.ID != msg.ID {
+		t.Fatalf("id = %q, want %q", got.ID, msg.ID)
+	}
+}
+
+func TestFrameOmitemptyV4Fields(t *testing.T) {
+	msg := Message{
+		Type: MsgPing,
+	}
+
+	frame, err := NewFrame(msg)
+	if err != nil {
+		t.Fatalf("new frame: %v", err)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(frame.Header, &metadata); err != nil {
+		t.Fatalf("decode metadata json: %v", err)
+	}
+
+	for _, key := range []string{"seq", "tunnel_uid", "acked_seq", "stream_terminal"} {
+		if _, ok := metadata[key]; ok {
+			t.Fatalf("metadata unexpectedly contains %q: %s", key, string(frame.Header))
+		}
+	}
+}
+
 func TestFrameMessageTypeMismatch(t *testing.T) {
 	msg := Message{Type: MsgPing}
 	frame, err := NewFrame(msg)
