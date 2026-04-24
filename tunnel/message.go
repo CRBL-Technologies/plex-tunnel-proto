@@ -85,9 +85,6 @@ func (m Message) Validate() error {
 		if m.ProtocolVersion < ProtocolVersion {
 			return fmt.Errorf("unsupported protocol version %d (minimum %d)", m.ProtocolVersion, ProtocolVersion)
 		}
-		if m.SessionID == "" && m.MaxConnections < 1 {
-			return errors.New("register message missing or invalid max_connections")
-		}
 	case MsgRegisterAck:
 		if m.Subdomain == "" {
 			return errors.New("register ack missing subdomain")
