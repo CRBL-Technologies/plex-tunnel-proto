@@ -1,4 +1,4 @@
-module github.com/CRBL-Technologies/plex-tunnel-proto
+module github.com/CRBL-Technologies/plex-tunnel-proto/v2
 
 go 1.25
 
